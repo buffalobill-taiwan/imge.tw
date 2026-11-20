@@ -89,7 +89,7 @@ class util{
 	}
 };
 
-if(php_sapi_name() === 'cli'){
+if(PHP_SAPI === 'cli' && realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__){
 	for($i = 0; $i < 10; $i++){
 		$r = rand();
 		$r = $i;

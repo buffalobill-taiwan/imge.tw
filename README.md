@@ -2,6 +2,12 @@
 
 用 PHP、MariaDB 和 Nginx 架設的圖片分享站，支援上傳、縮圖、最近圖片和重複圖片辨識。
 
+## 服務規格
+
+- 圖片可公開瀏覽。上傳採匿名方式，無須註冊或登入。本站不設定或使用 Cookie。
+- 公開站依來源 IP 決定是否允許上傳，單檔上限為 **8 MiB**。上傳政策不設請求頻率限制或儲存容量門檻。
+- 上傳使用有效期五分鐘的一次性票券。領票與上傳須使用同一個來源 IP。
+
 ## 快速開始
 
 需要 Docker Engine 或 Docker Desktop、Docker Compose v2，以及可執行 `sh` 和 `openssl` 的環境。Windows 可從 WSL 執行。下載或 clone 專案後，在專案根目錄執行：
@@ -50,7 +56,7 @@ proxy_set_header X-Forwarded-For $remote_addr;
 2. 修改後執行 `docker compose up -d --build web`，再以 `docker compose exec web nginx -t` 檢查設定。重新從公開網址開啟首頁，確認存取日誌的來源 IP 已是測試端的對外 IP。
 3. 分別從允許的台灣 IPv4 和非台灣 IPv4 測試。台灣來源應能領票並完成上傳。非台灣來源應能瀏覽，但領票和上傳都應被拒絕。若由 PHP 執行白名單，拒絕時會回傳含 `error` 的 JSON，驗收時請檢查回應內容。
 
-內層 Nginx 提供 10 MiB 請求上限，外層代理也要容納 multipart 開銷。
+內層 Nginx 的 **10 MiB** 上限適用於整個 HTTP 請求本文，包含檔案和 multipart 表單開銷。外層代理的請求本文上限也須容納這些開銷。
 
 ## 資料與移機
 
@@ -60,6 +66,20 @@ proxy_set_header X-Forwarded-For $remote_addr;
 - 公開儲存庫只包含程式、空站結構與部署設定。自己的 `.env`、SQL 備份及圖片放在儲存庫之外。專案沒有附上應用程式授權；公開發布前請由權利人決定授權。UIkit 與 jQuery 的授權告示保留在各自的來源檔。
 
 ## 驗證
+
+### 上傳中斷後對帳
+
+原圖和縮圖會先寫入各自目錄的暫存檔，再以原子更名發布。若 PHP 程序在資料庫交易提交前中斷，磁碟上可能留下暫存檔或沒有對應資料列的檔案。
+
+部署新版後，先暫停並等候進行中的上傳結束，再執行唯讀對帳，避免把上傳中的檔案列為異常。
+
+```sh
+docker compose exec -T app php app/reconcile-storage.php
+```
+
+輸出會列出公開圖片的缺檔（`missing`）、沒有對應資料列的檔案（`orphan`）及殘留的上傳暫存檔（`temporary`）。結束碼為 `0` 代表未發現差異，`1` 代表發現差異，`2` 代表對帳失敗。若公開圖片缺少原圖或縮圖，重新上傳相同檔案可沿用原短碼補齊缺檔。
+
+### HTTP 冒煙測試
 
 ```sh
 python3 scripts/smoke.py

@@ -97,16 +97,12 @@ function storeUpload($pdo, $ip, $token, $digest, $file, $info, $ext){
 
 			// Keep any surviving file from an existing record intact.
 			if(!$existing || !is_file($thumbnail)){
+				publishUploadFile($thumbnail, fn($temporary) => $thumb->writeImage($temporary));
 				$paths[] = $thumbnail;
-				if(!$thumb->writeImage($thumbnail)){
-					throw new RuntimeException('Unable to save thumbnail');
-				}
 			}
 			if(!$existing || !is_file($original)){
+				publishUploadFile($original, fn($temporary) => move_uploaded_file($file['tmp_name'], $temporary));
 				$paths[] = $original;
-				if(!move_uploaded_file($file['tmp_name'], $original)){
-					throw new RuntimeException('Unable to save original');
-				}
 			}
 		}
 
@@ -132,6 +128,28 @@ function storeUpload($pdo, $ip, $token, $digest, $file, $info, $ext){
 		}finally{
 			$release = $pdo->prepare('SELECT RELEASE_LOCK(?)');
 			$release->execute([$digest]);
+		}
+	}
+}
+
+function publishUploadFile($path, callable $write){
+	$directory = realpath(dirname($path));
+	if($directory === false){
+		throw new RuntimeException('Upload directory does not exist');
+	}
+
+	$temporary = tempnam($directory, '.upload-');
+	if($temporary === false){
+		throw new RuntimeException('Unable to create temporary upload file');
+	}
+	try{
+		if(dirname($temporary) !== $directory || !$write($temporary)
+			|| !chmod($temporary, 0644) || !rename($temporary, $path)){
+			throw new RuntimeException('Unable to publish image file: ' . $path);
+		}
+	}finally{
+		if(is_file($temporary) && !unlink($temporary)){
+			error_log('Unable to remove temporary upload file: ' . $temporary);
 		}
 	}
 }
