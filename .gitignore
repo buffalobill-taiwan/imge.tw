@@ -4,6 +4,7 @@
 *.ini.local
 /storage/
 /.codegraph/
+/.codegraph-wsl/
 *Zone.Identifier
 *.key
 *.pem
