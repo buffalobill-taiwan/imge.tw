@@ -154,27 +154,30 @@ def interrupted_upload(png):
         assert request(result["url"]) == content
 
 
-def container_request(path, *, png=None):
+def container_request(path, *, png=None, port=8080, forwarded_for=""):
     # A request from PHP's container reaches Nginx from a distinct TCP peer.
     source = r"""
-    $options = ['timeout' => 10];
+    $options = ['timeout' => 10, 'header' => []];
+    if ($argv[3] !== '') {
+        $options['header'][] = 'X-Forwarded-For: ' . $argv[3];
+    }
     $image = stream_get_contents(STDIN);
     if ($image !== '') {
         $boundary = bin2hex(random_bytes(16));
         $options['method'] = 'POST';
-        $options['header'] = "Content-Type: multipart/form-data; boundary=$boundary";
+        $options['header'][] = "Content-Type: multipart/form-data; boundary=$boundary";
         $options['content'] = "--$boundary\r\n"
             . "Content-Disposition: form-data; name=\"file\"; filename=\"test.png\"\r\n"
             . "Content-Type: image/png\r\n\r\n" . $image . "\r\n--$boundary--\r\n";
     }
-    $body = file_get_contents('http://web:8080' . $argv[1], false, stream_context_create(['http' => $options]));
+    $body = file_get_contents('http://web:' . $argv[2] . $argv[1], false, stream_context_create(['http' => $options]));
     if ($body === false || !str_contains($http_response_header[0], ' 200 ')) {
         exit(1);
     }
     echo $body;
     """
     return subprocess.run(
-        ["docker", "compose", "exec", "-T", "app", "php", "-r", source, path],
+        ["docker", "compose", "exec", "-T", "app", "php", "-r", source, path, str(port), forwarded_for],
         input=png or b"", stdout=subprocess.PIPE, check=True, timeout=20,
     ).stdout
 
@@ -213,6 +216,56 @@ def allowlist_checks(file, png, url):
     own = json.loads(container_request("/upload/" + container_token, png=unique))
     assert "duplicate" not in own and own["url"] != url, own
     assert request(own["url"]) == unique
+    trusted_proxy_checks(container_ip)
+
+
+def trusted_proxy_checks(client_ip):
+    proxy_port = 8083
+    conf = "/etc/nginx/conf.d/smoke-proxy.conf"
+    log = "/tmp/smoke-proxy.log"
+    probe = "/ticket?proxy-smoke=" + secrets.token_hex(8)
+    supplied_ip = "192.0.2.123"
+    # The app container is the untrusted client. Only the proxy uses loopback upstream.
+    config = f"""
+set_real_ip_from 127.0.0.1;
+log_format smoke_proxy '$server_port $request_uri $http_x_forwarded_for';
+access_log {log} smoke_proxy;
+server {{
+    listen {proxy_port};
+    location / {{
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_pass http://127.0.0.1:8080;
+    }}
+}}
+"""
+    try:
+        subprocess.run(
+            ["docker", "compose", "exec", "-T", "web", "sh", "-c",
+             'cat > "$1" && nginx -t && nginx -s reload', "sh", conf],
+            input=config, text=True, check=True, timeout=30,
+        )
+        for attempt in range(10):
+            try:
+                container_request("/", port=proxy_port)
+                break
+            except subprocess.CalledProcessError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.2)
+
+        for port in (8080, proxy_port):
+            body = json.loads(container_request(probe, port=port, forwarded_for=supplied_ip))
+            assert "ticket" in body, (port, body)
+            token = body["ticket"]
+            seed = sql(f"SELECT seed FROM ticket WHERE ticket = '{token}'")
+            assert seed == str(client_ip), (port, seed, client_ip)
+
+        # Check the upstream header itself so appending the client IP would fail too.
+        lines = compose("exec", "-T", "web", "cat", log).splitlines()
+        assert f"8080 {probe} {supplied_ip}" in lines, lines
+        assert f"8080 {probe} {client_ip}" in lines, lines
+    finally:
+        compose("exec", "-T", "web", "sh", "-c", 'rm -f "$1" "$2" && nginx -s reload', "sh", conf, log)
 
 
 def wait_for_home():
@@ -268,6 +321,6 @@ with tempfile.NamedTemporaryFile() as file:
         regression_checks(file, png, url, recent["t"])
         print("Ticket, size boundary, parallel upload, repair and interruption checks passed.")
         allowlist_checks(file, png, url)
-        print("Allowlisted upload, public browsing and source-bound ticket checks passed.")
+        print("Allowlisted upload, public browsing, source-bound tickets and trusted proxy checks passed.")
 
 print("Homepage, upload, original, thumbnail and duplicate checks passed.")

@@ -60,6 +60,8 @@ proxy_set_header X-Forwarded-For $remote_addr;
 
 ## 資料與移機
 
+`ticket` 表是本站保存領票來源 IP 的原始紀錄，`seed` 欄位記錄簽發時的來源 IP。這些紀錄應予保留，以便在檢警依法調取時提供。五分鐘的票券有效期只限制上傳資格。票券到期後可標記為過期，任何例行清理、維護或移機作業均不得僅因票券過期而刪除、匿名化或覆寫原始紀錄。資料庫備份與移機須完整保留 `ticket` 表，包括已過期及已使用的票券。
+
 - `app/` 放 PHP 邏輯和模板，`public/` 放入口和靜態檔，`deploy/` 放服務配置，`database/init/` 放空站建表 SQL。
 - 從舊站搬遷時，以同一時間點的資料庫備份和 `storage/i`、`storage/t` 為一組。新服務啟動前，將舊資料匯入專用資料庫並把兩個目錄還原到 `media` 資料卷根目錄，讓 PHP-FPM 的 `www-data` 擁有寫入權限。匯入前備份任何既有的目標資料。
 - 如舊站自訂了 Base62 字元順序，把原來的 62 字元依原順序設定在 `IMGE_BASE62`，以保留圖片短碼。移機後抽查舊原圖與縮圖。
@@ -87,6 +89,6 @@ python3 scripts/smoke.py
 
 請在測試站執行。此命令需要 Python 3 和 curl，會建立一張測試圖，檢查上傳、原圖、縮圖與重複上傳。GitHub Actions 會在獨立的 Compose 環境執行相同測試。
 
-CI 另外使用 `python3 scripts/smoke.py --isolated-compose`，驗證票券過期與重用、8 MiB 大小邊界、並行上傳、缺檔修復及交易提交前中斷後的重試。測試站從 `local` 模式啟動，最後切換至 `allowlist`，驗證允許的來源能領票及上傳、拒絕的來源仍可公開瀏覽，以及票券綁定簽發時的來源 IP。
+CI 另外使用 `python3 scripts/smoke.py --isolated-compose`，驗證票券過期與重用、8 MiB 大小邊界、並行上傳、缺檔修復及交易提交前中斷後的重試。測試站從 `local` 模式啟動，最後切換至 `allowlist`，驗證允許的來源能領票及上傳、拒絕的來源仍可公開瀏覽，以及票券綁定簽發時的來源 IP。測試也會在隔離環境暫時啟用可信代理，檢查代理覆寫來自用戶端的 `X-Forwarded-For`，並確認代理與直連兩條路徑的 `ticket.seed` 都記錄實際用戶端 IP。
 
 此模式會操作資料庫、媒體檔案及 PHP-FPM 工作程序，只能用於新建且可丟棄的 Compose 測試站。執行時須設定以 `imge-smoke-` 開頭的 `COMPOSE_PROJECT_NAME`，並讓 `IMGE_URL`、`IMGE_IMAGE_URL` 和 `IMGE_THUMB_URL` 分別指向該測試站的本機連接埠。
