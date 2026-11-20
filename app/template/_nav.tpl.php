@@ -11,6 +11,9 @@
 					<li class="uk-active"><a href="#tab-upload" class='nav-tab'>Upload</a></li>
 					<li id='li-tab-task' ><a href="#tab-task" class='nav-tab'>Task</a></li>
 					<li><a href="#tab-recent" class='nav-tab'>Reecnt</a></li>
+<?php if($fromTW):?>
+					<li><a href="#tab-all" class="nav-tab">All</a></li>
+<?php endif;?>
 					<li><a href="#tab-about" class='nav-tab'>About</a></li>
 				</ul>
 			</div>

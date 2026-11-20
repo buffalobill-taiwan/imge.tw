@@ -200,6 +200,9 @@ def allowlist_checks(file, png, url):
     assert request(url) == png
     assert json.loads(request(SITE + "/ticket"))["error"] == denied
     assert upload(file, probe)["error"] == denied
+    assert b'#tab-all' not in request(SITE + "/")
+    assert json.loads(request(SITE + "/all", expected=403))["error"] == denied
+    assert isinstance(json.loads(request(SITE + "/recent")), list)
 
     for address in (host_ip, container_ip):
         ip = int(address)
@@ -217,6 +220,51 @@ def allowlist_checks(file, png, url):
     assert "duplicate" not in own and own["url"] != url, own
     assert request(own["url"]) == unique
     trusted_proxy_checks(container_ip)
+    gallery_checks(png, url)
+
+
+def gallery_checks(png, url):
+    assert b'#tab-all' in request(SITE + "/")
+    for suffix in ("?before=0", "?before=2147483648", "?before[]=1"):
+        request(SITE + "/all" + suffix, expected=400)
+
+    def page(before=None):
+        query = "" if before is None else f"?before={before}"
+        return json.loads(request(SITE + "/all" + query))
+
+    original = page()["items"]
+    assert url in {item["i"] for item in original}
+    base_id = image_id(png)
+    sql("""INSERT INTO imge (ticket, seed, digest, upload_path, ext, upload_type,
+                            upload_size, mime_type, width, height)
+           SELECT CONCAT('gallery-', seq), 'gallery-fixture', CONCAT('gallery-', seq),
+                  'fixture.png', 'png', 'image/png', 1, 'image/png', 1, 1
+           FROM seq_1_to_100""")
+    empty = page()
+    assert empty["items"] == [] and empty["next"] is not None, empty
+    assert page(empty["next"]) == {"items": original, "next": None}
+
+    latest = sql("SELECT MAX(id) FROM imge")
+    for kind in ("i", "t"):
+        source = storage_path(kind, base_id, "png")
+        target = storage_path(kind, latest, "png")
+        compose(
+            "exec", "-T", "--user", "www-data", "app", "sh", "-c",
+            'mkdir -p "$(dirname "$2")" && cp "$1" "$2"', "sh", source, target,
+        )
+
+    first = page()
+    assert first["next"] == empty["next"] and len(first["items"]) == 1, first
+    with tempfile.NamedTemporaryFile() as file:
+        file.write(png[:-12] + chunk(b"tEXt", b"Comment\0gallery-insert") + png[-12:])
+        file.flush()
+        added = upload(file, ticket())
+        assert "url" in added, added
+    assert page()["items"][0]["i"] == added["url"]
+    second = page(first["next"])
+    assert second == {"items": original, "next": None}
+    assert first["items"][0]["i"] not in {item["i"] for item in second["items"]}
+
 
 
 def trusted_proxy_checks(client_ip):

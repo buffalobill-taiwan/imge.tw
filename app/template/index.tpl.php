@@ -34,6 +34,13 @@
 		<div id='slide' class="uk-flex-inline" uk-grid uk-lightbox="animation: slide"></div>
 		<p class="uk-text-default uk-text-center"><a id="reload_recent" class="uk-button uk-button-default" href="#">Reload</a></p>
 	</div>
+<?php if($fromTW):?>
+	<div id="tab-all" class="uk-width-1-1 imge-tab">
+		<h2 class="uk-heading-medium">All Images</h2>
+		<div id="all-images" class="uk-flex-inline" uk-grid uk-lightbox="animation: slide"></div>
+		<p class="uk-text-center"><button id="load-more-images" type="button" class="uk-button uk-button-default">More</button></p>
+	</div>
+<?php endif;?>
 	<div id="tab-about" class="uk-width-1-1 imge-tab">
 		<h2 class="uk-heading-medium">About</h2>
 		<ul class="uk-list uk-list-large">

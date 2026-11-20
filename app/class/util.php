@@ -71,6 +71,18 @@ class util{
 		return round($bytes/pow(1024, $e), 2).$s[$e];
 	}
 
+	static function galleryItems($rows){
+		$result = array();
+		foreach($rows as $r){
+			if(!is_file(util::id2ImgePath($r["id"], $r["ext"])) || !is_file(util::id2ThumbPath($r["id"]))){continue;}
+			$bid = util::id2bid($r["id"]);
+			$i = IURL . "/$bid.{$r["ext"]}";
+			$t = TURL . "/$bid.png";
+			$result[] = array("i" => $i, "t" => $t);
+		}
+		return $result;
+	}
+
 	static function info($PDO){
 		$IMGE = new imge($PDO);
 

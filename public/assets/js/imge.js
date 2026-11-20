@@ -9,6 +9,8 @@ var CURRENT_TASK_CARD = null;
 var UPLOAD_RUNNING = false;
 var RECENT_LOAD = false;
 var TOP_LOAD = false;
+var ALL_LOAD = false;
+var ALL_BEFORE = null;
 
 function initPaste(){
 	$("#paste").on("paste", pasteImage);
@@ -210,6 +212,7 @@ function createCardFromFile(file, invalid){
 function initHome(){
 	$("#home").click(clickHome);
 	$("#reload_recent").click(clickReloadRecent);
+	$("#load-more-images").click(loadAllImages);
 }
 
 function clickReloadRecent(event){
@@ -254,6 +257,9 @@ function switchTab(href){
 		RECENT_LOAD = true;
 		setTimeout(unsetRecentLoad, 1000 * 60);
 		loadRecent1();
+	}
+	if(href === "#tab-all" && !ALL_LOAD){
+		loadAllImages();
 	}
 	if(href == "#tab-top" && !TOP_LOAD){
 		TOP_LOAD = true;
@@ -315,12 +321,41 @@ function loadRecent1(){
 function loadRecent2(data){
 	var slide = $("#slide");
 	slide.empty();
-	[...data].forEach((item, i) => {
+	appendGalleryItems(slide, data);
+	$("#reload_recent").show();
+}
+
+function loadAllImages(){
+	var more = $("#load-more-images");
+	if(!more.length || more.prop("disabled")){return;}
+
+	more.prop("disabled", true);
+	var params = ALL_BEFORE === null ? {} : {before: ALL_BEFORE};
+	function showError(){
+		UIkit.notification({message: "Unable to load all images", status: "danger"});
+	}
+	$.ajax({url: "/all", data: params, dataType: "json", timeout: 15000})
+		.done(function(data){
+			if(!data || !Array.isArray(data.items) ||
+				(data.next !== null && !(Number.isInteger(data.next) && data.next > 0))){
+				showError();
+				return;
+			}
+			appendGalleryItems($("#all-images"), data.items);
+			ALL_LOAD = true;
+			ALL_BEFORE = data.next;
+			more.toggle(data.next !== null);
+		})
+		.fail(showError)
+		.always(function(){ more.prop("disabled", false); });
+}
+
+function appendGalleryItems(slide, data){
+	data.forEach(function(item){
 		var div = $("<div></div>").appendTo(slide);
 		var aTag = $("<a></a>").addClass("uk-inline").attr("href", item.i).attr("data-caption",item.i).appendTo(div);
 		var img = $("<img />").attr("src", item.t).attr("width", 128).attr("height", 128).appendTo(aTag);
 	});
-	$("#reload_recent").show();
 }
 
 function initBrowseFile(){

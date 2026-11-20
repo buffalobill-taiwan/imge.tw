@@ -66,6 +66,18 @@ class imge{
 		$rows = $stmt->fetchAll();
 		return $rows;
 	}
+	function browse($before){
+		$sql = "SELECT id, ext FROM imge WHERE status = 0";
+		if($before !== null){
+			$sql .= " AND id < :before";
+		}
+		$stmt = $this->_pdo->prepare($sql . " ORDER BY id DESC LIMIT 101");
+		if($before !== null){
+			$stmt->bindValue(':before', $before, PDO::PARAM_INT);
+		}
+		$stmt->execute();
+		return $stmt->fetchAll();
+	}
 	function total(){
 		$sql = "SELECT count(`id`) `total`
 			FROM `imge`
