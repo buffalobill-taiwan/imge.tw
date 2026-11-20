@@ -44,5 +44,4 @@ if(!is_file($path)){
 }
 
 header("Content-Type: image/png");
-header("X-Accel-Redirect: /" . implode("/", array_map("rawurlencode", explode("/", $path))));
-exit();
+util::sendMedia($path);

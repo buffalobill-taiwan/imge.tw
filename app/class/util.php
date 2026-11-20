@@ -71,6 +71,20 @@ class util{
 		return round($bytes/pow(1024, $e), 2).$s[$e];
 	}
 
+	static function sendMedia($path){
+		if(getenv('IMGE_FILE_DELIVERY') === 'x-sendfile'){
+			$absolute = realpath($path);
+			if($absolute === false){
+				http_response_code(404);
+				exit();
+			}
+			header('X-Sendfile: ' . $absolute);
+		}else{
+			header('X-Accel-Redirect: /' . implode('/', array_map('rawurlencode', explode('/', $path))));
+		}
+		exit();
+	}
+
 	static function galleryItems($rows){
 		$result = array();
 		foreach($rows as $r){

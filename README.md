@@ -59,6 +59,18 @@ proxy_set_header X-Forwarded-For $remote_addr;
 
 內層 Nginx 的 **10 MiB** 上限適用於整個 HTTP 請求本文，包含檔案和 multipart 表單開銷。外層代理的請求本文上限也須容納這些開銷。
 
+### Apache 與 PHP-FPM 部署
+
+主站、原圖與縮圖的 HTTPS vhost 分別交給 `public/index.php`、`public/image.php` 與 `public/thumbnail.php`。主站另外提供 `public/assets` 的靜態檔案。媒體、資料庫與程式設定留在公開目錄之外。將資料庫連線資訊、三個 `IMGE_*_URL` 和 `IMGE_UPLOAD_MODE=allowlist` 設在站台專用的 PHP-FPM pool。主站的 PHP 單檔上限設為 8 MiB，POST 與 Apache 請求本文上限設為 10 MiB。
+
+在 PHP-FPM 環境設定 `IMGE_FILE_DELIVERY=x-sendfile`，並在兩個圖片 vhost 啟用 `mod_xsendfile`。原圖與縮圖的 `XSendFilePath` 各自限制在對應媒體目錄的實體路徑。未設定 `IMGE_FILE_DELIVERY` 時，程式使用 Nginx 的 `X-Accel-Redirect`。
+
+若主站經 Cloudflare 代理，在主站 vhost 啟用 `mod_remoteip` 的 `RemoteIPHeader CF-Connecting-IP`，並用 `RemoteIPTrustedProxyList` 載入 [Cloudflare 公布的 IPv4 與 IPv6 網段](https://www.cloudflare.com/ips/)。清單每行放一個 CIDR。設定後執行 `apache2ctl configtest` 再重新載入 Apache。透過**公開網域**以允許與未允許的來源驗證 `/ticket`、`/upload/<ticket>` 和 `/all`，並確認新票券的 `seed` 記錄的是發出請求的訪客 IP。
+
+### 更新台灣 IPv4 白名單
+
+從 [APNIC delegated statistics](https://ftp.apnic.net/stats/apnic/) 取得有日期的資料檔並核對校驗值，選取國別 `TW`、類型 `ipv4`、狀態 `allocated` 或 `assigned` 的紀錄。以起始位址與位址數算出含首尾的整數範圍，合併相鄰或重疊範圍。先備份現行資料庫的 `allowip` 表，再於同一交易停用原啟用範圍並插入新範圍。完成後比對啟用清單與來源資料，並從允許及未允許的來源重新驗證。APNIC 的國別欄位代表登記歸屬。
+
 ## 資料與移機
 
 `ticket` 表是本站保存領票來源 IP 的原始紀錄，`seed` 欄位記錄簽發時的來源 IP。這些紀錄應予保留，以便在檢警依法調取時提供。五分鐘的票券有效期只限制上傳資格。票券到期後可標記為過期，任何例行清理、維護或移機作業均不得僅因票券過期而刪除、匿名化或覆寫原始紀錄。資料庫備份與移機須完整保留 `ticket` 表，包括已過期及已使用的票券。

@@ -48,5 +48,4 @@ $ip = util::getRemoteIP();
 
 header("Content-Type: {$info["mime_type"]}");
 header("Content-Length: " . filesize($path));
-header("X-Accel-Redirect: /" . implode("/", array_map("rawurlencode", explode("/", $path))));
-exit();
+util::sendMedia($path);
