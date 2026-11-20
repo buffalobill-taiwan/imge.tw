@@ -86,3 +86,5 @@ python3 scripts/smoke.py
 ```
 
 請在測試站執行。此命令需要 Python 3 和 curl，會建立一張測試圖，檢查上傳、原圖、縮圖與重複上傳。GitHub Actions 會在獨立的 Compose 環境執行相同測試。
+
+CI 另外使用 `python3 scripts/smoke.py --isolated-compose`，驗證票券過期與重用、8 MiB 大小邊界、並行上傳、缺檔修復及交易提交前中斷後的重試。此模式會操作資料庫、媒體檔案及 PHP-FPM 工作程序，只能用於新建且可丟棄的 Compose 測試站。執行時須設定以 `imge-smoke-` 開頭的 `COMPOSE_PROJECT_NAME`，並讓 `IMGE_URL`、`IMGE_IMAGE_URL` 和 `IMGE_THUMB_URL` 分別指向該測試站的本機連接埠。

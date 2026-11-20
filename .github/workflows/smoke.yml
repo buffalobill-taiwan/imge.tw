@@ -7,10 +7,12 @@ jobs:
   compose:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      COMPOSE_PROJECT_NAME: imge-smoke-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - run: sh scripts/setup.sh
-      - run: python3 scripts/smoke.py
+      - run: python3 scripts/smoke.py --isolated-compose
       - if: failure()
         run: docker compose logs
       - if: always()

@@ -1,4 +1,6 @@
 """Exercise the HTTP upload and delivery flow on a fresh test instance."""
+import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -27,6 +29,144 @@ def chunk(name, data):
     return struct.pack("!I", len(data)) + name + data + struct.pack("!I", zlib.crc32(name + data))
 
 
+def ticket():
+    return json.loads(request(SITE + "/ticket"))["ticket"]
+
+
+def upload(file, token, *, expected=200):
+    body = request(
+        SITE + "/upload/" + token,
+        "-F", f"file=@{file.name};filename=test.txt;type=application/octet-stream",
+        expected=expected,
+    )
+    return json.loads(body) if expected == 200 else body
+
+
+def compose(*args):
+    return subprocess.check_output(["docker", "compose", *args], text=True, timeout=30).strip()
+
+
+def sql(statement):
+    return compose(
+        "exec", "-T", "db", "sh", "-c",
+        'exec mariadb -u root -p"$MARIADB_ROOT_PASSWORD" -N -B "$MARIADB_DATABASE" -e "$1"',
+        "sh", statement,
+    )
+
+
+def media(*args):
+    return compose("exec", "-T", "app", *args)
+
+
+def image_id(content):
+    digest = hashlib.sha256(content).hexdigest()
+    return sql(f"SELECT id FROM imge WHERE digest = '{digest}'")
+
+
+def reconcile():
+    # Preserve the report even when discrepancies cause the command to exit 1.
+    return media("sh", "-c", "php app/reconcile-storage.php; status=$?; test \"$status\" -le 1")
+
+
+def storage_path(kind, image, extension):
+    number = int(image)
+    return f"storage/{kind}/{number % 10000 // 100}/{number % 100}/{number}.{extension}"
+
+
+def regression_checks(file, png, url, thumbnail_url):
+    used = ticket()
+    assert upload(file, used) == {"url": url, "duplicate": True}
+    assert upload(file, used)["error"] == "Ticket Not Valid"
+    expired = ticket()
+    sql(f"UPDATE ticket SET expire = NOW() - INTERVAL 1 SECOND WHERE ticket = '{expired}'")
+    assert upload(file, expired)["error"] == "Ticket Not Valid"
+
+    thumbnail = storage_path("t", image_id(png), "png")
+    media("rm", thumbnail)
+    request(thumbnail_url, expected=404)
+    assert f"missing\t{thumbnail}" in reconcile().splitlines()
+    retry = ticket()
+    media("mkdir", thumbnail)
+    try:
+        assert upload(file, retry)["error"] == "Unable to Save Image"
+        assert request(url) == png
+    finally:
+        media("rmdir", thumbnail)
+    assert upload(file, retry) == {"url": url}
+    assert request(thumbnail_url).startswith(signature)
+
+    with tempfile.NamedTemporaryFile() as other:
+        unique = png[:-12] + chunk(b"tEXt", b"Comment\0" + secrets.token_hex(16).encode()) + png[-12:]
+        other.write(unique)
+        other.flush()
+        tokens = [ticket(), ticket()]
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda token: upload(other, token), tokens))
+        assert sum(result.get("duplicate") is True for result in results) == 1, results
+        assert results[0]["url"] == results[1]["url"]
+        assert request(results[0]["url"]) == unique
+
+    with tempfile.NamedTemporaryFile() as boundary:
+        limit = 8 * 1024 * 1024
+        prefix = png[:-12]
+        metadata = b"Comment\0"
+        boundary.write(prefix + chunk(b"tEXt", metadata.ljust(limit - len(png) - 12, b"a")) + png[-12:])
+        boundary.flush()
+        assert boundary.tell() == limit
+        assert "url" in upload(boundary, ticket())
+        boundary.write(b"\0")
+        boundary.flush()
+        assert upload(boundary, ticket())["error"] == "Size Too Big"
+
+    interrupted_upload(png)
+
+
+def interrupted_upload(png):
+    content = png[:-12] + chunk(b"tEXt", b"Comment\0" + secrets.token_hex(16).encode()) + png[-12:]
+    with tempfile.NamedTemporaryFile() as file:
+        file.write(content)
+        file.flush()
+        token = ticket()
+        # This hook runs after both files have been published and before commit.
+        sql(f"""CREATE TRIGGER smoke_pause_upload BEFORE UPDATE ON ticket FOR EACH ROW
+                SET NEW.status = NEW.status + IF(NEW.ticket = '{token}' AND NEW.status = 1, SLEEP(15), 0)""")
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(upload, file, token, expected=502)
+                deadline = time.monotonic() + 7
+                while not sql("SELECT ID FROM information_schema.PROCESSLIST WHERE STATE = 'User sleep'"):
+                    if pending.done() or time.monotonic() >= deadline:
+                        raise RuntimeError("Upload did not reach the pre-commit pause")
+                    time.sleep(0.1)
+                workers = media("sh", "-c", "for f in /proc/[0-9]*/cmdline; do "
+                                "if grep -aq '^php-fpm: pool www' \"$f\"; then "
+                                'pid=${f#/proc/}; kill -KILL "${pid%/cmdline}" && echo "$pid"; fi; done')
+                assert workers, "No PHP-FPM workers were stopped"
+                pending.result()
+        finally:
+            sql("DROP TRIGGER smoke_pause_upload")
+        assert not image_id(content)
+        report = reconcile().splitlines()
+        assert sum(line.startswith("orphan\t") for line in report) == 2, report
+        assert not any(line.startswith(("temporary\t", "missing\t")) for line in report), report
+        result = upload(file, token)
+        assert request(result["url"]) == content
+
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--isolated-compose", action="store_true", help="enable fault injection on a disposable Compose project")
+options = parser.parse_args()
+if options.isolated_compose:
+    project = os.getenv("COMPOSE_PROJECT_NAME", "")
+    if not project.startswith("imge-smoke-"):
+        parser.error("--isolated-compose requires a disposable COMPOSE_PROJECT_NAME beginning with imge-smoke-")
+    for endpoint, port in [(SITE, 8080), (IMAGE, 8081), (THUMB, 8082)]:
+        published_port = compose("port", "web", str(port)).rsplit(":", 1)[1]
+        if endpoint not in {f"http://localhost:{published_port}", f"http://127.0.0.1:{published_port}"}:
+            parser.error(f"{endpoint} must point to the disposable Compose project")
+    assert reconcile() == "Storage reconciliation found no discrepancies."
+
+
 for attempt in range(30):
     try:
         assert b"imge.tw" in request(SITE + "/")
@@ -50,20 +190,16 @@ with tempfile.NamedTemporaryFile() as file:
     file.write(png)
     file.flush()
 
-    def upload():
-        ticket = json.loads(request(SITE + "/ticket"))["ticket"]
-        return json.loads(request(
-            SITE + "/upload/" + ticket,
-            "-F", f"file=@{file.name};filename=test.txt;type=application/octet-stream",
-        ))
-
-    uploaded = upload()
+    uploaded = upload(file, ticket())
     url = uploaded["url"]
     assert url.startswith(IMAGE + "/") and url.endswith(".png")
     assert hashlib.sha256(request(url)).digest() == hashlib.sha256(png).digest()
     recent = next(item for item in json.loads(request(SITE + "/recent")) if item["i"] == url)
     assert recent["t"].startswith(THUMB + "/")
     assert request(recent["t"]).startswith(signature)
-    assert upload() == {"url": url, "duplicate": True}
+    assert upload(file, ticket()) == {"url": url, "duplicate": True}
+    if options.isolated_compose:
+        regression_checks(file, png, url, recent["t"])
+        print("Ticket, size boundary, parallel upload, repair and interruption checks passed.")
 
 print("Homepage, upload, original, thumbnail and duplicate checks passed.")
