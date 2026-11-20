@@ -2,6 +2,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+from ipaddress import IPv4Address
 import json
 import os
 import secrets
@@ -153,6 +154,78 @@ def interrupted_upload(png):
         assert request(result["url"]) == content
 
 
+def container_request(path, *, png=None):
+    # A request from PHP's container reaches Nginx from a distinct TCP peer.
+    source = r"""
+    $options = ['timeout' => 10];
+    $image = stream_get_contents(STDIN);
+    if ($image !== '') {
+        $boundary = bin2hex(random_bytes(16));
+        $options['method'] = 'POST';
+        $options['header'] = "Content-Type: multipart/form-data; boundary=$boundary";
+        $options['content'] = "--$boundary\r\n"
+            . "Content-Disposition: form-data; name=\"file\"; filename=\"test.png\"\r\n"
+            . "Content-Type: image/png\r\n\r\n" . $image . "\r\n--$boundary--\r\n";
+    }
+    $body = file_get_contents('http://web:8080' . $argv[1], false, stream_context_create(['http' => $options]));
+    if ($body === false || !str_contains($http_response_header[0], ' 200 ')) {
+        exit(1);
+    }
+    echo $body;
+    """
+    return subprocess.run(
+        ["docker", "compose", "exec", "-T", "app", "php", "-r", source, path],
+        input=png or b"", stdout=subprocess.PIPE, check=True, timeout=20,
+    ).stdout
+
+
+def allowlist_checks(file, png, url):
+    # Learn the source address seen by Nginx rather than assuming a Docker gateway.
+    probe = ticket()
+    host_ip = IPv4Address(sql(f"SELECT seed FROM ticket WHERE ticket = '{probe}'"))
+    sql("UPDATE allowip SET status = -1")
+    subprocess.run(
+        ["docker", "compose", "up", "-d", "--no-deps", "--force-recreate", "app", "web"],
+        env=dict(os.environ, IMGE_UPLOAD_MODE="allowlist"), check=True, timeout=60,
+    )
+    wait_for_home()
+    container_ip = IPv4Address(media("php", "-r", "echo gethostbyname(gethostname());"))
+    assert host_ip != container_ip
+
+    denied = "Your IP is not allowed."
+    assert b'imge.tw' in request(SITE + "/")
+    assert request(url) == png
+    assert json.loads(request(SITE + "/ticket"))["error"] == denied
+    assert upload(file, probe)["error"] == denied
+
+    for address in (host_ip, container_ip):
+        ip = int(address)
+        sql(f"INSERT INTO allowip (start, end, comment) VALUES ({ip}, {ip}, 'smoke test')")
+    host_token = ticket()
+    container_token = json.loads(container_request("/ticket"))["ticket"]
+    assert sql(f"SELECT seed FROM ticket WHERE ticket = '{host_token}'") == str(host_ip)
+    assert sql(f"SELECT seed FROM ticket WHERE ticket = '{container_token}'") == str(container_ip)
+
+    crossed = container_request("/upload/" + host_token, png=png)
+    assert json.loads(crossed)["error"] == "Ticket Not Valid"
+    assert upload(file, host_token) == {"url": url, "duplicate": True}
+    unique = png[:-12] + chunk(b"tEXt", b"Comment\0" + secrets.token_hex(16).encode()) + png[-12:]
+    own = json.loads(container_request("/upload/" + container_token, png=unique))
+    assert "duplicate" not in own and own["url"] != url, own
+    assert request(own["url"]) == unique
+
+
+def wait_for_home():
+    for attempt in range(30):
+        try:
+            assert b"imge.tw" in request(SITE + "/")
+            return
+        except (subprocess.CalledProcessError, RuntimeError):
+            if attempt == 29:
+                raise
+            time.sleep(1)
+
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--isolated-compose", action="store_true", help="enable fault injection on a disposable Compose project")
 options = parser.parse_args()
@@ -167,14 +240,7 @@ if options.isolated_compose:
     assert reconcile() == "Storage reconciliation found no discrepancies."
 
 
-for attempt in range(30):
-    try:
-        assert b"imge.tw" in request(SITE + "/")
-        break
-    except (subprocess.CalledProcessError, RuntimeError):
-        if attempt == 29:
-            raise
-        time.sleep(1)
+wait_for_home()
 
 assert b"UIkit" in request(SITE + "/js/uikit.min.js")
 assert json.loads(request(SITE + "/info"))["top"] == []
@@ -201,5 +267,7 @@ with tempfile.NamedTemporaryFile() as file:
     if options.isolated_compose:
         regression_checks(file, png, url, recent["t"])
         print("Ticket, size boundary, parallel upload, repair and interruption checks passed.")
+        allowlist_checks(file, png, url)
+        print("Allowlisted upload, public browsing and source-bound ticket checks passed.")
 
 print("Homepage, upload, original, thumbnail and duplicate checks passed.")
