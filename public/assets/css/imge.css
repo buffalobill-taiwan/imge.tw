@@ -1,0 +1,49 @@
+#browse-file.disabled, #drop_zone.disabled, #paste_zone.disabled, #paste.disabled{
+	cursor: not-allowed;
+}
+
+#browse-file:not(.disabled){
+	cursor: pointer;
+}
+
+#browse-file:not(.disabled):hover{
+	background-color: DeepSkyBlue;
+}
+
+#drop_zone.dropped:not(.disabled){
+	background-color: DeepSkyBlue;
+}
+
+.imge-tab{
+	display: none;
+}
+
+#li-tab-task{
+	display: none;
+}
+
+img.preview{
+	max-width: 100%;
+	object-fit: cover;
+}
+
+.imge-filename{
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.uk-card-invalid{
+	border: 1px dotted red;
+}
+
+.uk-card-badge.imgebadge{
+	position: absolute;
+	top: unset;
+	bottom: 15px;
+	right: 15px;
+}
+
+.uk-card-title.imge-filename{
+	font-size: 16px;
+}

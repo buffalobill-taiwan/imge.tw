@@ -1,0 +1,55 @@
+services:
+  db:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: imge
+      MARIADB_USER: imge
+      MARIADB_PASSWORD: ${DB_PASSWORD:?Run sh scripts/setup.sh first}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Run sh scripts/setup.sh first}
+    volumes:
+      - database:/var/lib/mysql
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      target: app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_PASSWORD: ${DB_PASSWORD:?Run sh scripts/setup.sh first}
+      IMGE_URL: ${IMGE_URL:-http://localhost:8780}
+      IMGE_IMAGE_URL: ${IMGE_IMAGE_URL:-http://localhost:8781}
+      IMGE_THUMB_URL: ${IMGE_THUMB_URL:-http://localhost:8782}
+      IMGE_UPLOAD_MODE: ${IMGE_UPLOAD_MODE:-local}
+      IMGE_BASE62: ${IMGE_BASE62:-}
+    volumes:
+      - media:/app/storage
+
+  web:
+    build:
+      context: .
+      target: web
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+        restart: true
+    ports:
+      - "127.0.0.1:${IMGE_PORT:-8780}:8080"
+      - "127.0.0.1:${IMGE_IMAGE_PORT:-8781}:8081"
+      - "127.0.0.1:${IMGE_THUMB_PORT:-8782}:8082"
+    volumes:
+      - media:/app/storage:ro
+
+volumes:
+  database:
+  media:
