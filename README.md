@@ -26,7 +26,31 @@ sh scripts/setup.sh
 
 預設對外連接埠只綁定 `127.0.0.1`，且本機起步設定允許上傳。若要公開站台，請由主機的 HTTPS 反向代理分別將主站、原圖、縮圖導到三個連接埠，並用 `IMGE_URL`、`IMGE_IMAGE_URL`、`IMGE_THUMB_URL` 設定完整的 HTTPS 網址。原圖與縮圖仍使用獨立網域。
 
-使用 IPv4 上傳白名單時，將 `IMGE_UPLOAD_MODE` 設為 `allowlist`，在 `allowip` 增加允許的範圍，並在容器 Nginx 設定可信代理及真實來源 IP。只信任反向代理的實際來源位址，並確認應用程式收到的是訪客 IP。首次初始化附的 loopback 白名單適用於本機來源。內層 Nginx 提供 10 MiB 請求上限，外層代理也要容納 multipart 開銷。
+### 透過反向代理取得訪客 IP
+
+容器內的 Nginx 預設使用 TCP 連線的來源 IP。透過反向代理部署時，在 `deploy/nginx/imge.conf` 加入 `set_real_ip_from`，填入 **容器收到代理連線時看到的來源 IP**。主機代理經過 Docker 轉送時，這個位址可能是 Docker 網路閘道，而非主機的 loopback。只加入實際受控的代理位址，避免信任整個 Docker 子網。如果直連流量也會從同一個位址抵達容器，請先限制直連，確保只有代理能經由該位址連入。
+
+若最外層代理也是 Nginx，且直接面向訪客，請在轉送的 `location` 內覆寫訪客提供的標頭。
+
+```nginx
+proxy_set_header X-Forwarded-For $remote_addr;
+```
+
+若有多層代理，由入口代理覆寫標頭，後續可信代理再附加各自看到的來源位址。容器 Nginx 從標頭右側略過可信代理，將找到的第一個非可信位址透過 `REMOTE_ADDR` 傳給 PHP。未設定可信代理時，Nginx 會忽略 `X-Forwarded-For`。
+
+### 台灣 IP 上傳限制
+
+本站提供公開瀏覽，台灣 IP 可匿名上傳。若由 PHP 執行限制，將 `IMGE_UPLOAD_MODE` 設為 `allowlist`，並在資料庫的 `allowip` 表加入允許的台灣 IPv4 範圍。首頁、`/ticket` 和 `/upload/<ticket>` 會各自檢查來源 IP。票券有效期為五分鐘，領票與上傳須使用同一個來源 IP。
+
+白名單目前只支援 IPv4，空站初始化只加入 `127.0.0.1`。如果由外層代理執行台灣 IP 限制，應讓 `/ticket` 和 `/upload/<ticket>` 都套用同一套地區規則，並保留公開瀏覽。
+
+### 部署後驗收
+
+1. 加入可信代理前，先透過公開網址開啟首頁，再用 `docker compose logs --tail=30 web` 查看 Nginx 看見的連線來源。確認該位址只供受控代理連入後，才將它填入 `set_real_ip_from`。
+2. 修改後執行 `docker compose up -d --build web`，再以 `docker compose exec web nginx -t` 檢查設定。重新從公開網址開啟首頁，確認存取日誌的來源 IP 已是測試端的對外 IP。
+3. 分別從允許的台灣 IPv4 和非台灣 IPv4 測試。台灣來源應能領票並完成上傳。非台灣來源應能瀏覽，但領票和上傳都應被拒絕。若由 PHP 執行白名單，拒絕時會回傳含 `error` 的 JSON，驗收時請檢查回應內容。
+
+內層 Nginx 提供 10 MiB 請求上限，外層代理也要容納 multipart 開銷。
 
 ## 資料與移機
 
